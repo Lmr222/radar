@@ -1,5 +1,5 @@
 
-name: Radar
+name: main
 
 on:
   workflow_dispatch:
