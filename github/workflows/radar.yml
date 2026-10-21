@@ -1,8 +1,8 @@
 name: Radar
 
-on:
+'on':
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: '*/10 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -16,18 +16,27 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Recuperer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - run: pip install -r requirements.txt
+          python-version: '3.12'
+
+      - name: Installer les dependances
+        run: pip install -r requirements.txt
+
       - name: Restaurer la memoire du radar
         uses: actions/cache/restore@v4
         with:
           path: state
           key: radar-state-${{ github.run_id }}
-          restore-keys: radar-state-
+          restore-keys: |
+            radar-state-
+
       - name: Lancer le radar
         run: python radar.py
         env:
@@ -38,6 +47,7 @@ jobs:
           CLUSTER_USD: ${{ vars.CLUSTER_USD }}
           PRICE_MOVE: ${{ vars.PRICE_MOVE }}
           MAX_EVENTS: ${{ vars.MAX_EVENTS }}
+
       - name: Sauvegarder la memoire du radar
         if: always()
         uses: actions/cache/save@v4
