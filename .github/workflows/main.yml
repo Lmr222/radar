@@ -1,4 +1,4 @@
-Name: Radar
+name: Radar
 
 on:
   schedule:
