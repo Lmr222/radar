@@ -121,4 +121,63 @@ def scan_events(events, prev):
                 old = p.get("prices", {}).get(k)
                 if old is not None and x - old >= PRICE_MOVE:  # hausse = l'argent arrive sur cette option
                     alerts.append(f"{head}\n⚡ Forte hausse de prix\n👉 Option : {o}\nMarché : {m.get('question', '')}\nPrix : {old*100:.0f} % → {x*100:.0f} %\n{link}")
-        new[eid] = {"volume": vol, "deltas": deltas, "prices":
+        new[eid] = {"volume": vol, "deltas": deltas, "prices": prices}
+    return alerts, new
+
+
+def scan_trades(events, seen, first):
+    """Gros paris : on regroupe les nouveaux achats par option."""
+    ids = ",".join(str(e["id"]) for e in events)
+    by_slug = {e.get("slug"): e for e in events}
+    trades = get(f"{DATA}/trades", eventId=ids, filterType="CASH", filterAmount=MIN_TRADE, limit=500)
+    groups = {}
+    for t in trades:
+        key = f"{t.get('transactionHash')}:{t.get('asset')}:{t.get('size')}"
+        if key in seen:
+            continue
+        seen[key] = int(time.time())
+        if first or t.get("side") != "BUY" or PROPS.match(t.get("title") or ""):  # 1er passage = historique, on n'alerte pas
+            continue
+        cash = float(t["size"]) * float(t["price"])
+        ev = by_slug.get(t.get("eventSlug"), {})
+        g = groups.setdefault((t["conditionId"], t["outcome"]), dict(
+            head=f"{ev.get('_sport', '')} · {ev.get('title') or t.get('title', '?')}",
+            market=t.get("title", "?"), outcome=t["outcome"], slug=t.get("eventSlug", ""),
+            total=0.0, n=0, biggest=0.0, price=float(t["price"])))
+        g["total"] += cash
+        g["n"] += 1
+        g["biggest"] = max(g["biggest"], cash)
+    alerts = []
+    for g in groups.values():
+        if g["biggest"] >= WHALE or g["total"] >= CLUSTER:
+            odds = f" (cote ≈ {1/g['price']:.2f})" if g["price"] > 0 else ""
+            alerts.append(
+                f"{g['head']}\n🐋 Gros paris détectés\n👉 Option : {g['outcome']}\nMarché : {g['market']}\n"
+                f"{g['n']} paris, total ≈ {g['total']:,.0f} $ (le plus gros : {g['biggest']:,.0f} $)\n"
+                f"Prix actuel : {g['price']*100:.0f} %{odds}\nhttps://polymarket.com/event/{g['slug']}")
+    return alerts
+
+
+def main():
+    state = load_state()
+    first = not state
+    events, counts = fetch_events()
+    seen, alerts, new_events = state.get("seen", {}), [], {}
+    if events:
+        a1, new_events = scan_events(events, state.get("events", {}))
+        try:
+            a2 = scan_trades(events, seen, first)
+        except Exception as e:
+            print(f"[warn] trades: {e}", flush=True)
+            a2 = []
+        alerts = [] if first else a1 + a2
+    save_state({"events": new_events, "seen": dict(list(seen.items())[-3000:]), "ts": int(time.time())})
+    if first:
+        notify(f"✅ Radar démarré. {len(events)} matchs surveillés.\nÉvénements trouvés par tag : {counts}")
+    for a in alerts[:10]:
+        notify(a)
+    print(f"OK — {len(events)} matchs, {len(alerts)} alerte(s)", flush=True)
+
+
+if __name__ == "__main__":
+    main()
