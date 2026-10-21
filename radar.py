@@ -11,6 +11,7 @@ Usage local :  python radar.py --dry   (affiche les alertes, n'envoie rien)
 """
 import json
 import os
+import re
 import statistics
 import sys
 import time
@@ -35,6 +36,10 @@ SPIKE_X = float(env("SPIKE_FACTOR", "4"))          # volume >= 4x la normale
 SPIKE_MIN = float(env("SPIKE_MIN_USD", "10000"))   # ... et au moins ce montant
 TOKEN, CHAT = os.getenv("TELEGRAM_TOKEN"), os.getenv("TELEGRAM_CHAT_ID")
 DRY = "--dry" in sys.argv
+SPORTS = {"soccer": "⚽ FOOTBALL", "epl": "⚽ FOOTBALL", "champions-league": "⚽ FOOTBALL",
+          "basketball": "🏀 BASKET", "nba": "🏀 BASKET", "tennis": "🎾 TENNIS"}
+# paris sur un joueur précis, ex. « Naz Reid: Points O/U 17.5 » (trop de bruit, ignorés)
+PROPS = re.compile(r"^(?!.*\bvs\b)[^:]+:.*O/U", re.I)
 
 
 def get(url, **params):
@@ -84,7 +89,8 @@ def fetch_events():
             data = []
         counts[tag] = len(data)
         for ev in data:
-            events[ev["id"]] = ev
+            ev.setdefault("_sport", SPORTS.get(tag, tag.upper()))
+            events.setdefault(ev["id"], ev)
     top = sorted(events.values(), key=lambda e: float(e.get("volume24hr") or 0), reverse=True)
     return top[:MAX_EVENTS], counts
 
@@ -96,76 +102,23 @@ def scan_events(events, prev):
         eid, p = str(ev["id"]), prev.get(str(ev["id"]), {})
         title = ev.get("title", "?")
         link = f"https://polymarket.com/event/{ev.get('slug', '')}"
+        head = f"{ev.get('_sport', '')} · {title}"
         vol, deltas = float(ev.get("volume") or 0), list(p.get("deltas", []))
         if "volume" in p:
             d = vol - p["volume"]
             if len(deltas) >= 3:
                 normal = statistics.median(deltas)
                 if d >= SPIKE_MIN and d >= SPIKE_X * max(normal, 1):
-                    alerts.append(f"📈 Pic de volume\n{title}\n+{d:,.0f} $ depuis le dernier passage (normal : ~{normal:,.0f} $)\n{link}")
+                    alerts.append(f"{head}\n📈 Pic de volume\n+{d:,.0f} $ depuis le dernier passage (normal : ~{normal:,.0f} $)\n{link}")
             deltas = (deltas + [d])[-30:]
         prices = {}
         for m in ev.get("markets") or []:
+            if PROPS.match(m.get("question") or ""):
+                continue
             for o, x in zip(jl(m.get("outcomes")), jl(m.get("outcomePrices"))):
                 k, x = f"{m.get('conditionId')}|{o}", float(x)
                 prices[k] = x
                 old = p.get("prices", {}).get(k)
                 if old is not None and x - old >= PRICE_MOVE:  # hausse = l'argent arrive sur cette option
-                    alerts.append(f"⚡ Forte variation de prix\n{title}\n{m.get('question', '')} → {o} : {old*100:.0f} % → {x*100:.0f} %\n{link}")
-        new[eid] = {"volume": vol, "deltas": deltas, "prices": prices}
-    return alerts, new
-
-
-def scan_trades(events, seen, first):
-    """Gros paris : on regroupe les nouveaux achats par option."""
-    ids = ",".join(str(e["id"]) for e in events)
-    trades = get(f"{DATA}/trades", eventId=ids, filterType="CASH", filterAmount=MIN_TRADE, limit=500)
-    groups = {}
-    for t in trades:
-        key = f"{t.get('transactionHash')}:{t.get('asset')}:{t.get('size')}"
-        if key in seen:
-            continue
-        seen[key] = int(time.time())
-        if first or t.get("side") != "BUY":  # 1er passage = historique, on n'alerte pas
-            continue
-        cash = float(t["size"]) * float(t["price"])
-        g = groups.setdefault((t["conditionId"], t["outcome"]), dict(
-            title=t.get("title", "?"), outcome=t["outcome"], slug=t.get("eventSlug", ""),
-            total=0.0, n=0, biggest=0.0, price=float(t["price"])))
-        g["total"] += cash
-        g["n"] += 1
-        g["biggest"] = max(g["biggest"], cash)
-    alerts = []
-    for g in groups.values():
-        if g["biggest"] >= WHALE or g["total"] >= CLUSTER:
-            odds = f" (cote ≈ {1/g['price']:.2f})" if g["price"] > 0 else ""
-            alerts.append(
-                f"🐋 Gros paris détectés\n{g['title']}\nOption : {g['outcome']}\n"
-                f"{g['n']} paris, total ≈ {g['total']:,.0f} $ (le plus gros : {g['biggest']:,.0f} $)\n"
-                f"Prix actuel : {g['price']*100:.0f} %{odds}\nhttps://polymarket.com/event/{g['slug']}")
-    return alerts
-
-
-def main():
-    state = load_state()
-    first = not state
-    events, counts = fetch_events()
-    seen, alerts, new_events = state.get("seen", {}), [], {}
-    if events:
-        a1, new_events = scan_events(events, state.get("events", {}))
-        try:
-            a2 = scan_trades(events, seen, first)
-        except Exception as e:
-            print(f"[warn] trades: {e}", flush=True)
-            a2 = []
-        alerts = [] if first else a1 + a2
-    save_state({"events": new_events, "seen": dict(list(seen.items())[-3000:]), "ts": int(time.time())})
-    if first:
-        notify(f"✅ Radar démarré. {len(events)} matchs surveillés.\nÉvénements trouvés par tag : {counts}")
-    for a in alerts[:10]:
-        notify(a)
-    print(f"OK — {len(events)} matchs, {len(alerts)} alerte(s)", flush=True)
-
-
-if __name__ == "__main__":
-    main()
+                    alerts.append(f"{head}\n⚡ Forte hausse de prix\n👉 Option : {o}\nMarché : {m.get('question', '')}\nPrix : {old*100:.0f} % → {x*100:.0f} %\n{link}")
+        new[eid] = {"volume": vol, "deltas": deltas, "prices":
