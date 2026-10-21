@@ -1,1 +1,59 @@
 
+name: Radar
+
+'on':
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: radar
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Recuperer le code
+        uses: actions/checkout@v4
+
+      - name: Installer Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Installer les dependances
+        run: pip install -r requirements.txt
+
+      - name: Restaurer la memoire du radar
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: radar-state-${{ github.run_id }}
+          restore-keys: |
+            radar-state-
+
+      - name: Lancer le radar
+        run: python radar.py
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SPORT_TAGS: ${{ vars.SPORT_TAGS }}
+          WHALE_USD: ${{ vars.WHALE_USD }}
+          CLUSTER_USD: ${{ vars.CLUSTER_USD }}
+          PRICE_MOVE: ${{ vars.PRICE_MOVE }}
+          MAX_EVENTS: ${{ vars.MAX_EVENTS }}
+
+      - name: Sauvegarder la memoire du radar
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: radar-state-${{ github.run_id }}
+→ Runs every 10 minutes
+
