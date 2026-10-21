@@ -1,23 +1,46 @@
-name: Radar
+Name: Radar
 
 on:
-  workflow_dispatch:
   schedule:
     - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: radar
+  cancel-in-progress: false
 
 jobs:
-  run-radar:
+  scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js / Python (selon votre projet)
-        uses: actions/setup-python@v5 # Remplacez par setup-node ou autre selon vos besoins
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-
-      - name: Run script
-        run: |
-          echo "Exécution du radar..."
-          # Ajoutez ici la commande pour lancer votre script (ex: python main.py)
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Restaurer la memoire du radar
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: radar-state-${{ github.run_id }}
+          restore-keys: radar-state-
+      - name: Lancer le radar
+        run: python radar.py
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SPORT_TAGS: ${{ vars.SPORT_TAGS }}
+          WHALE_USD: ${{ vars.WHALE_USD }}
+          CLUSTER_USD: ${{ vars.CLUSTER_USD }}
+          PRICE_MOVE: ${{ vars.PRICE_MOVE }}
+          MAX_EVENTS: ${{ vars.MAX_EVENTS }}
+      - name: Sauvegarder la memoire du radar
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: radar-state-${{ github.run_id }}
