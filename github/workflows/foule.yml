@@ -1,0 +1,42 @@
+name: Foule
+
+on:
+  schedule:
+    - cron: "3-59/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foule
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Restaurer la memoire du bot
+        uses: actions/cache/restore@v4
+        with:
+          path: state_foule
+          key: foule-state-${{ github.run_id }}
+          restore-keys: foule-state-
+      - name: Lancer le bot
+        run: python foule.py
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.FOULE_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.FOULE_CHAT_ID }}
+          DIGEST_HOURS: ${{ vars.FOULE_DIGEST_HOURS }}
+      - name: Sauvegarder la memoire du bot
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state_foule
+          key: foule-state-${{ github.run_id }}
