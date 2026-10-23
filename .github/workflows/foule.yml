@@ -29,7 +29,7 @@ jobs:
           key: foule-state-${{ github.run_id }}
           restore-keys: foule-state-
       - name: Lancer le bot
-        run: python foule.py
+        run: python "$(ls foule_v*.py | sort -V | tail -1)"
         env:
           TELEGRAM_TOKEN: ${{ secrets.FOULE_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.FOULE_CHAT_ID }}
