@@ -170,7 +170,7 @@ def scan_events(events, prev, now):
             if len(deltas) >= 3:
                 normal = statistics.median(deltas)
                 if d >= SPIKE_MIN and rate >= SPIKE_X * max(normal, 1):
-                    alerts.append(f"{head}\n📈 Pic de volume\n+{d:,.0f} $ depuis le dernier passage (normal : ~{normal:,.0f} $ par 10 min)\n{link}")
+                    alerts.append(f"{head}\n📈 Pic de volume\n+{d:,.0f} $depuis le dernier passage (normal : ~{normal:,.0f}$ par 10 min)\n{link}")
             deltas = (deltas + [rate])[-30:]
         prices = {}
         for m in ev.get("markets") or []:
@@ -188,10 +188,16 @@ def scan_events(events, prev, now):
 
 def fetch_trades(ids, now, min_usd, window):
     out = []
-    for off in range(0, 3000, 500):
-        page = get(f"{DATA}/trades", eventId=ids, filterType="CASH", filterAmount=min_usd, limit=500, offset=off)
-        out += page
-        if len(page) < 500 or int(page[-1].get("timestamp") or now) < now - window:
+    for off in range(0, 1500, 500):
+        try:
+            page = get(f"{DATA}/trades", eventId=ids, filterType="CASH", filterAmount=min_usd, limit=500, offset=off)
+            if not page:
+                break
+            out += page
+            if len(page) < 500 or int(page[-1].get("timestamp") or now) < now - window:
+                break
+        except Exception as e:
+            print(f"[warn] trades offset {off}: {e}", flush=True)
             break
     return out
 
@@ -200,7 +206,7 @@ def fmt(g):
     p = g["price"]
     title = "🎯 MONTANTE — favori très misé" if g["kind"] == "favori" else "🐋 Gros paris détectés"
     lines = [g["head"], title, f"👉 Option : {pari_lisible(g['market'], g['outcome'])}", f"Marché : {g['market']}",
-             f"{g['n']} paris, total ≈ {g['total']:,.0f} $ (le plus gros : {g['biggest']:,.0f} $)",
+             f"{g['n']} paris, total ≈ {g['total']:,.0f} $(le plus gros : {g['biggest']:,.0f}$)",
              f"Prix actuel : {p*100:.0f} % (cote ≈ {1/p:.2f})" if p > 0 else "Prix actuel : ?"]
     if g.get("share") is not None and g["kind"] != "favori":
         lines.append(f"Poids : {g['share']*100:.0f} % du volume de ce marché")
@@ -268,153 +274,4 @@ def discover(universe):
             c = (e.get("slug") or "").split("-")[0].lower()
             codes[c] = codes.get(c, 0) + 1
     liste = ", ".join(f"{c}: {n}" for c, n in sorted(codes.items(), key=lambda x: -x[1]))
-    return f"🔎 Championnats de football trouvés (code : nombre de matchs)\n{liste}\nEnvoie-moi une capture : on choisira les petits championnats à surveiller."
-
-
-SIZES = ["< 5 000 $", "5 000 à 10 000 $", "≥ 10 000 $", "taille inconnue"]
-CATS = {"pertinent": "✅ Signaux envoyés (pertinents)", "filtre": "🔇 Signaux filtrés (non envoyés)",
-        "fav": "🎯 Favoris (montante)", "petits": "🔎 Petits championnats", "ancien": "Anciens signaux (avant le filtre)"}
-
-
-def record(stats, tr, won):
-    """Ajoute un signal réglé au bilan. Simulation : 1 unité misée au prix de l'alerte."""
-    price = tr.get("price") or 0
-    if not 0.01 < price < 0.99:
-        return
-    gain = (1 / price - 1) if won else -1.0
-    total = tr.get("total")
-    size = SIZES[3] if total is None else SIZES[0] if total < 5000 else SIZES[1] if total < 10000 else SIZES[2]
-    cat = "ancien" if "sent" not in tr else "fav" if tr.get("kind") == "favori" else "pertinent" if tr["sent"] else "filtre"
-    cats = [cat] + (["petits"] if tr.get("small") else [])
-    buckets = [stats.setdefault("all", {}), stats.setdefault("sport", {}).setdefault(tr.get("sport", "?"), {}),
-               stats.setdefault("size", {}).setdefault(size, {})]
-    buckets += [stats.setdefault("cat", {}).setdefault(c, {}) for c in cats]
-    for b in buckets:
-        b["n"] = b.get("n", 0) + 1
-        b["w"] = b.get("w", 0) + (1 if won else 0)
-        b["gain"] = round(b.get("gain", 0.0) + gain, 4)
-        b["psum"] = round(b.get("psum", 0.0) + price, 4)
-
-
-def line(label, b):
-    n, w = b.get("n", 0), b.get("w", 0)
-    return f"{label} : {n} signaux → ✅ {w} / ❌ {n - w} ({b.get('gain', 0):+.1f} unités)"
-
-
-def report(stats):
-    a = stats.get("all", {})
-    n = a.get("n", 0)
-    if not n:
-        return None
-    w = a["w"]
-    msg = [f"📊 Bilan des signaux ({n} réglés)", f"✅ {w} gagnants ({w / n * 100:.0f} %) · ❌ {n - w} perdants",
-           f"Gain simulé : {a['gain']:+.1f} unités en misant 1 unité sur chaque signal ({a['gain'] / n * 100:+.0f} % par signal)",
-           "", "Par catégorie :"]
-    for k, label in CATS.items():
-        b = stats.get("cat", {}).get(k)
-        if not b:
-            continue
-        msg.append(line(label, b))
-        if k == "fav":
-            real, implied = b["w"] / b["n"], b.get("psum", 0) / b["n"]
-            msg.append(f"   Réussite réelle {real * 100:.0f} % vs prix moyen {implied * 100:.0f} %")
-            msg.append(f"   10 paliers d'affilée : {real ** 10 * 100:.0f} % de chances" if b["n"] >= 30
-                       else "   (moins de 30 favoris : estimation des paliers pas encore fiable)")
-    msg += ["", "Par sport :"] + [line(k, v) for k, v in sorted(stats.get("sport", {}).items())]
-    msg += ["", "Par montant du signal :"] + [line(k, stats["size"][k]) for k in SIZES if k in stats.get("size", {})]
-    if n < 100:
-        msg.append("\n⚠️ Moins de 100 signaux : trop peu pour conclure, le hasard pèse encore beaucoup.")
-    msg.append("Calcul au prix Polymarket, pas à la cote de ton bookmaker.")
-    return "\n".join(msg)
-
-
-def check_results(tracked, now, stats):
-    """Pour chaque gros pari signalé : annonce ✅ ou ❌ quand le marché est réglé."""
-    out, by_slug = [], {}
-    for k, tr in list(tracked.items()):
-        if now - tr["ts"] > 7 * 86400:
-            del tracked[k]  # trop ancien, on abandonne
-        elif now - tr["ts"] > 1800:  # un match ne se règle jamais en moins de 30 minutes
-            by_slug.setdefault(tr["slug"], []).append(k)
-    for slug, keys in by_slug.items():
-        try:
-            markets = {m.get("conditionId"): m for ev in get(f"{GAMMA}/events", slug=slug) for m in ev.get("markets") or []}
-        except Exception as e:
-            print(f"[warn] résultat {slug}: {e}", flush=True)
-            continue
-        for k in keys:
-            tr, m = tracked[k], markets.get(k.split("|")[0])
-            if not m or not m.get("closed"):
-                continue
-            prices = dict(zip(jl(m.get("outcomes")), [float(x) for x in jl(m.get("outcomePrices"))]))
-            price = prices.get(tr["outcome"])
-            if price is None or 0.01 < price < 0.99:
-                continue  # pas encore réglé (ou marché annulé)
-            verdict = "✅ Résultat final : alerte GAGNANTE" if price >= 0.99 else "❌ Résultat final : alerte PERDANTE"
-            record(stats, tr, price >= 0.99)
-            a = stats.get("all", {})
-            bilan = f"Bilan : ✅ {a.get('w', 0)} gagnants / ❌ {a.get('n', 0) - a.get('w', 0)} perdants"
-            out.append(f"{verdict}\n{tr['head']}\n👉 Option : {pari_lisible(tr['market'], tr['outcome'])}\nMarché : {tr['market']}\n"
-                       f"Prix au moment de l'alerte : {tr['price']*100:.0f} %\nhttps://polymarket.com/event/{tr['slug']}\n{bilan}")
-            if not tr.get("sent", True):
-                out.pop()  # signal filtré : pas de message, seulement le bilan
-            del tracked[k]
-    return out
-
-
-def main():
-    now = int(time.time())
-    state = load_state()
-    first = not state
-    window = max(WINDOW, min(now - state.get("ts", now) + 300, 6 * 3600))  # couvre tout le temps écoulé
-    events, counts, universe = fetch_events()
-    seen, tracked, stats = state.get("seen", {}), state.get("tracked", {}), state.get("stats", {})
-    alerts, new_events = [], state.get("events", {})
-    if events:
-        a1, new_events = scan_events(events, state.get("events", {}), now)
-        try:
-            a2 = scan_trades(events, seen, first, now, window)
-        except Exception as e:
-            print(f"[warn] trades: {e}", flush=True)
-            a2 = []
-        alerts = [] if first else [{"text": t, "send": True} for t in a1] + a2
-    results = [] if first else check_results(tracked, now, stats)
-    if first:
-        notify(f"✅ Radar démarré. {len(events)} matchs surveillés.\nÉvénements trouvés par tag : {counts}")
-    discovered = state.get("discovered", False)
-    if events and not discovered:
-        notify(discover(universe))
-        discovered = True
-    threads = {k: v for k, v in state.get("threads", {}).items() if v.get("ts", 0) > now - 172800}
-    hhmm = dt.datetime.fromtimestamp(now, dt.timezone.utc).strftime("%H:%M")
-    sent = 0
-    for a in alerts:
-        if a.get("track"):  # tous les signaux sont suivis, envoyés ou non
-            tracked.setdefault(a["track"][0], dict(a["track"][1], ts=now))
-        if a.get("send") and sent < 10:
-            m = re.search(r"polymarket\.com/event/(\S+)\s*$", a["text"])
-            slug, prev, text = (m.group(1) if m else None), None, a["text"]
-            if slug and slug in threads:  # même match déjà signalé : on cite et on rappelle le dernier signal
-                prev = threads[slug]
-                text = f"↩️ Déjà signalé sur ce match à {prev['at']} : {prev['line']}\n\n" + text
-            mid = notify(text, prev["id"] if prev else None)
-            if slug and mid:
-                info = a["track"][1] if a.get("track") else None
-                line = f"{pari_lisible(info['market'], info['outcome'])} ({info['total']:,} $)" if info else "pic de volume"
-                threads[slug] = {"id": mid, "at": hhmm, "line": line, "ts": now}
-            sent += 1
-    for r in results[:10]:
-        notify(r)
-    day, last = dt.datetime.fromtimestamp(now, dt.timezone.utc), state.get("last_report", "")
-    runs = [r for r in state.get("runs", []) if r > now - 86400] + [now]
-    if not first and day.hour >= 8 and last != day.strftime("%Y-%m-%d"):
-        notify((report(stats) or "📊 Aucun signal réglé pour le moment.")
-               + f"\n\nℹ️ Le radar a tourné {len(runs)} fois ces dernières 24 h (idéal : 144).")
-        last = day.strftime("%Y-%m-%d")
-    save_state({"events": new_events, "seen": dict(list(seen.items())[-6000:]), "tracked": tracked,
-                "stats": stats, "last_report": last, "runs": runs[-200:], "threads": threads, "discovered": discovered, "ts": now})
-    print(f"OK — {len(events)} matchs, {sent} alerte(s) envoyée(s), {len(alerts) - sent} suivie(s) en silence, {len(results)} résultat(s)", flush=True)
-
-
-if __name__ == "__main__":
-    main()
+    return f"🔎 Championnats
